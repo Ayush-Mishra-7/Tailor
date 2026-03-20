@@ -16,6 +16,8 @@ export const sessions = sqliteTable("sessions", {
   jobDescription: text("job_description").notNull(),
   companyName: text("company_name"),
   jobTitle: text("job_title"),
+  llmProvider: text("llm_provider").notNull().default(""),
+  llmModel: text("llm_model").notNull().default(""),
   status: text("status").notNull().default("active"), // active, completed
   tailoredText: text("tailored_text"),
   messages: text("messages").notNull().default("[]"), // JSON array of chat messages

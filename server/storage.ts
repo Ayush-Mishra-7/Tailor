@@ -40,6 +40,8 @@ function ensureSchema(): void {
       job_description TEXT NOT NULL,
       company_name TEXT,
       job_title TEXT,
+      llm_provider TEXT NOT NULL DEFAULT '',
+      llm_model TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'active',
       tailored_text TEXT,
       messages TEXT NOT NULL DEFAULT '[]',
@@ -54,6 +56,14 @@ function ensureSchema(): void {
 
   if (!hasColumn("sessions", "enrichment_metadata")) {
     sqlite.exec("ALTER TABLE sessions ADD COLUMN enrichment_metadata TEXT NOT NULL DEFAULT '{}';");
+  }
+
+  if (!hasColumn("sessions", "llm_provider")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN llm_provider TEXT NOT NULL DEFAULT '';");
+  }
+
+  if (!hasColumn("sessions", "llm_model")) {
+    sqlite.exec("ALTER TABLE sessions ADD COLUMN llm_model TEXT NOT NULL DEFAULT '';");
   }
 }
 

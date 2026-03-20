@@ -19,6 +19,7 @@ The server supports multiple LLM providers through a single provider abstraction
 - One of these provider setups:
   - Anthropic API key
   - OpenAI API key
+  - Perplexity API key
   - Google Gemini API key
   - Ollama running locally
 
@@ -72,6 +73,7 @@ Provider credentials:
 ```env
 ANTHROPIC_API_KEY=
 OPENAI_API_KEY=
+PERPLEXITY_API_KEY=
 GOOGLE_API_KEY=
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 ```
@@ -80,7 +82,17 @@ Selection behavior:
 
 - If `LLM_PROVIDER` is omitted, Tailor defaults to `anthropic`
 - If `LLM_MODEL` is omitted, Tailor uses a provider-specific default model
+- `LLM_PROVIDER` selects which server-side LLM adapter is used for session generation and chat
+- `LLM_MODEL` is passed through to that provider as the model identifier to call
+- The frontend top bar shows only providers that are actually configured on the server
+- The top bar selection is stored on each session, so follow-up chat keeps using the same provider and model
 - If the selected provider is missing required configuration, the server returns a clear JSON error
+
+Model menu behavior:
+
+- Cloud providers use a curated server-side model list for the dropdown
+- Ollama models are discovered dynamically from the local Ollama server when it is reachable
+- If you want a broader model menu for a cloud provider, extend the catalog in [server/llm/index.ts](server/llm/index.ts)
 
 ## Provider Setup
 
@@ -120,7 +132,26 @@ PORT=5000
 Notes:
 
 - `OPENAI_API_KEY` is required
-- The integration tests currently exercise the OpenAI provider path
+- The integration tests cover both the OpenAI and Perplexity provider paths
+
+### Perplexity
+
+Use Perplexity if you want to call Perplexity's chat-completions API with a Perplexity key.
+
+Example `.env`:
+
+```env
+LLM_PROVIDER=perplexity
+LLM_MODEL=sonar
+PERPLEXITY_API_KEY=your_perplexity_key
+ENABLE_ENRICHMENT=true
+PORT=5000
+```
+
+Notes:
+
+- `PERPLEXITY_API_KEY` is required
+- If you want a different Perplexity model, change `LLM_MODEL`
 
 ### Gemini
 
@@ -252,7 +283,7 @@ Unsupported provider example:
 
 ```json
 {
-  "error": "Unsupported LLM_PROVIDER \"foo\". Supported values are anthropic, openai, ollama, gemini."
+  "error": "Unsupported LLM_PROVIDER \"foo\". Supported values are anthropic, openai, ollama, gemini, perplexity."
 }
 ```
 

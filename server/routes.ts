@@ -6,7 +6,7 @@ import mammoth from "mammoth";
 import path from "path";
 import fs from "fs";
 import { type ChatMessage } from "@shared/schema";
-import { generateLLMResponse } from "./llm";
+import { generateLLMResponse, getAvailableLLMOptions, resolveLLMSelection } from "./llm";
 import { buildTailoringPrompt, enrichSessionContext } from "./enrichment";
 
 const uploadDir = path.resolve("uploads");
@@ -51,6 +51,16 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express,
 ): Promise<Server> {
+  app.get("/api/llm/options", async (_req: Request, res: Response) => {
+    try {
+      const options = await getAvailableLLMOptions();
+      res.json(options);
+    } catch (err: any) {
+      const statusCode = err?.statusCode || err?.status || 500;
+      res.status(statusCode).json({ error: err?.message || "Failed to load LLM options" });
+    }
+  });
+
   // Upload resume
   app.post("/api/resumes/upload", upload.single("file"), async (req: Request, res: Response) => {
     try {
@@ -94,11 +104,15 @@ export async function registerRoutes(
   // Create tailoring session
   app.post("/api/sessions", async (req: Request, res: Response) => {
     try {
-      const { resumeId, jobUrl, jobDescription, companyName, jobTitle } = req.body;
+      const { resumeId, jobUrl, jobDescription, companyName, jobTitle, llmProvider, llmModel } = req.body;
       const normalizedJobUrl = typeof jobUrl === "string" && jobUrl.trim() ? jobUrl.trim() : null;
       const normalizedJobDescription = typeof jobDescription === "string" ? jobDescription.trim() : "";
       const normalizedCompanyName = typeof companyName === "string" && companyName.trim() ? companyName.trim() : null;
       const normalizedJobTitle = typeof jobTitle === "string" && jobTitle.trim() ? jobTitle.trim() : null;
+      const selection = resolveLLMSelection({
+        provider: typeof llmProvider === "string" ? llmProvider : null,
+        model: typeof llmModel === "string" ? llmModel : null,
+      });
 
       if (!resumeId || (!normalizedJobDescription && !normalizedJobUrl)) {
         return res.status(400).json({ error: "Resume ID and either a job description or job URL are required" });
@@ -118,6 +132,8 @@ export async function registerRoutes(
         jobDescription: normalizedJobDescription,
         companyName: normalizedCompanyName,
         jobTitle: normalizedJobTitle,
+        llmProvider: selection.provider,
+        llmModel: selection.model,
         enrichmentContext: enrichment.promptContext,
         enrichmentMetadata: JSON.stringify(enrichment.metadata),
       });
@@ -134,6 +150,7 @@ export async function registerRoutes(
       const llmResponse = await generateLLMResponse(
         [{ role: "user", content: userMsg }],
         { systemPrompt: SYSTEM_PROMPT },
+        selection,
       );
 
       const messages: ChatMessage[] = [
@@ -184,6 +201,9 @@ export async function registerRoutes(
 
       const llmResponse = await generateLLMResponse(llmMessages, {
         systemPrompt: SYSTEM_PROMPT,
+      }, {
+        provider: session.llmProvider || null,
+        model: session.llmModel || null,
       });
       messages.push({ role: "assistant", content: llmResponse });
 

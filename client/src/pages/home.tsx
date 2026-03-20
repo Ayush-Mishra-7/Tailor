@@ -2,8 +2,17 @@ import { useState, useRef, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
@@ -20,6 +29,7 @@ import {
   ArrowLeft,
   Sun,
   Moon,
+  Cpu,
   CheckCircle2,
   Link as LinkIcon,
 } from "lucide-react";
@@ -29,11 +39,33 @@ const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
 type Step = "upload" | "job" | "chat";
 
+type LLMModelOption = {
+  id: string;
+  label: string;
+};
+
+type LLMProviderOption = {
+  id: string;
+  label: string;
+  defaultModel: string;
+  models: LLMModelOption[];
+  allowsCustomModel: boolean;
+  modelSource: "curated" | "ollama";
+};
+
+type LLMOptionsResponse = {
+  providers: LLMProviderOption[];
+  defaultProvider: string | null;
+  defaultModel: string | null;
+};
+
 export default function Home() {
   const [step, setStep] = useState<Step>("upload");
   const [selectedResume, setSelectedResume] = useState<Resume | null>(null);
   const [currentSession, setCurrentSession] = useState<Session | null>(null);
   const [chatInput, setChatInput] = useState("");
+  const [selectedProvider, setSelectedProvider] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
   const [isDark, setIsDark] = useState(() =>
     window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
@@ -54,6 +86,47 @@ export default function Home() {
   const { data: resumes = [] } = useQuery<Resume[]>({
     queryKey: ["/api/resumes"],
   });
+
+  const {
+    data: llmOptions,
+    isLoading: isLoadingLLMOptions,
+  } = useQuery<LLMOptionsResponse>({
+    queryKey: ["/api/llm/options"],
+  });
+
+  const availableProviders = llmOptions?.providers ?? [];
+  const activeProviderOption = availableProviders.find((provider) => provider.id === selectedProvider) ?? null;
+  const sessionLocked = step === "chat" && Boolean(currentSession);
+
+  useEffect(() => {
+    if (availableProviders.length === 0) {
+      setSelectedProvider("");
+      setSelectedModel("");
+      return;
+    }
+
+    const fallbackProviderId = llmOptions?.defaultProvider ?? availableProviders[0]?.id ?? "";
+    const fallbackProvider = availableProviders.find((provider) => provider.id === fallbackProviderId) ?? availableProviders[0];
+
+    if (!fallbackProvider) {
+      return;
+    }
+
+    if (!availableProviders.some((provider) => provider.id === selectedProvider)) {
+      setSelectedProvider(fallbackProvider.id);
+      setSelectedModel(fallbackProvider.defaultModel);
+    }
+  }, [availableProviders, llmOptions?.defaultProvider, selectedProvider]);
+
+  useEffect(() => {
+    if (!activeProviderOption) {
+      return;
+    }
+
+    if (!activeProviderOption.models.some((model) => model.id === selectedModel)) {
+      setSelectedModel(activeProviderOption.defaultModel);
+    }
+  }, [activeProviderOption, selectedModel]);
 
   // Upload resume
   const uploadMutation = useMutation({
@@ -89,11 +162,15 @@ export default function Home() {
       jobDescription: string;
       companyName?: string;
       jobTitle?: string;
+      llmProvider: string;
+      llmModel: string;
     }) => {
       const res = await apiRequest("POST", "/api/sessions", data);
       return res.json() as Promise<Session>;
     },
     onSuccess: (session) => {
+      setSelectedProvider(session.llmProvider);
+      setSelectedModel(session.llmModel);
       setCurrentSession(session);
       setStep("chat");
     },
@@ -124,7 +201,7 @@ export default function Home() {
 
   const handleCreateSession = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (!selectedResume) return;
+    if (!selectedResume || !selectedProvider || !selectedModel) return;
     const fd = new FormData(e.currentTarget);
     createSessionMutation.mutate({
       resumeId: selectedResume.id,
@@ -132,6 +209,8 @@ export default function Home() {
       jobDescription: fd.get("jobDescription") as string,
       companyName: fd.get("companyName") as string,
       jobTitle: fd.get("jobTitle") as string,
+      llmProvider: selectedProvider,
+      llmModel: selectedModel,
     });
   };
 
@@ -180,6 +259,11 @@ export default function Home() {
     setChatInput("");
   };
 
+  const activeProviderLabel = activeProviderOption?.label
+    ?? currentSession?.llmProvider
+    ?? (isLoadingLLMOptions ? "Loading LLMs" : "No LLM configured");
+  const activeModelLabel = selectedModel || currentSession?.llmModel || "";
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Header */}
@@ -194,6 +278,106 @@ export default function Home() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-2 max-w-[220px] justify-start"
+                  data-testid="button-llm-selector"
+                >
+                  <Cpu className="w-4 h-4 shrink-0" />
+                  <span className="truncate text-left">
+                    {activeProviderLabel}
+                    {activeModelLabel ? ` · ${activeModelLabel}` : ""}
+                  </span>
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-80 space-y-4">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium">LLM selection</p>
+                      <p className="text-xs text-muted-foreground">
+                        Choose the provider and model for the next tailoring run.
+                      </p>
+                    </div>
+                    <Badge variant="outline" className="shrink-0">
+                      {availableProviders.length} ready
+                    </Badge>
+                  </div>
+                </div>
+
+                {availableProviders.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No configured providers were detected. Add at least one API key in `.env`, or start Ollama locally, then restart the server.
+                  </p>
+                ) : (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="llm-provider" className="text-sm">Provider</Label>
+                      <Select
+                        value={selectedProvider}
+                        onValueChange={setSelectedProvider}
+                        disabled={sessionLocked}
+                      >
+                        <SelectTrigger id="llm-provider" data-testid="select-llm-provider">
+                          <SelectValue placeholder="Select provider" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {availableProviders.map((provider) => (
+                            <SelectItem
+                              key={provider.id}
+                              value={provider.id}
+                              data-testid={`option-llm-provider-${provider.id}`}
+                            >
+                              {provider.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="llm-model" className="text-sm">Model</Label>
+                      <Select
+                        value={selectedModel}
+                        onValueChange={setSelectedModel}
+                        disabled={sessionLocked || !activeProviderOption}
+                      >
+                        <SelectTrigger id="llm-model" data-testid="select-llm-model">
+                          <SelectValue placeholder="Select model" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(activeProviderOption?.models ?? []).map((model) => (
+                            <SelectItem
+                              key={model.id}
+                              value={model.id}
+                              data-testid={`option-llm-model-${model.id}`}
+                            >
+                              {model.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
+                    <p className="text-xs text-muted-foreground">
+                      {activeProviderOption?.modelSource === "ollama"
+                        ? "Ollama models are discovered from the local Ollama server at runtime."
+                        : "Cloud provider model lists are curated on the server. Add more there if you want a broader menu."}
+                    </p>
+
+                    {sessionLocked && (
+                      <p className="text-xs text-muted-foreground">
+                        This selection is locked for the active session. Use Start over to switch providers for the next run.
+                      </p>
+                    )}
+                  </>
+                )}
+              </PopoverContent>
+            </Popover>
+
             {step !== "upload" && (
               <Button
                 variant="ghost"
@@ -327,8 +511,18 @@ export default function Home() {
               <p className="text-sm text-muted-foreground">
                 Using: {selectedResume.filename}
               </p>
+              {activeProviderOption && (
+                <p className="text-xs text-muted-foreground">
+                  LLM: {activeProviderOption.label} · {selectedModel}
+                </p>
+              )}
             </CardHeader>
             <CardContent>
+              {availableProviders.length === 0 && (
+                <div className="mb-4 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+                  No configured LLMs are available yet. Add an API key in `.env` or start Ollama, then restart the server.
+                </div>
+              )}
               <form onSubmit={handleCreateSession} className="space-y-4">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
@@ -385,7 +579,7 @@ export default function Home() {
                 </div>
                 <Button
                   type="submit"
-                  disabled={createSessionMutation.isPending}
+                  disabled={createSessionMutation.isPending || !selectedProvider || !selectedModel || availableProviders.length === 0}
                   className="w-full"
                   data-testid="button-start-tailoring"
                 >
@@ -408,17 +602,27 @@ export default function Home() {
           <div className="flex flex-col gap-4">
             {/* Session info */}
             <div className="flex items-center justify-between gap-3">
-              <div className="text-sm text-muted-foreground">
-                {currentSession.companyName && (
-                  <span className="font-medium text-foreground">
-                    {currentSession.companyName}
-                  </span>
-                )}
-                {currentSession.jobTitle && (
-                  <span>
-                    {currentSession.companyName ? " — " : ""}
-                    {currentSession.jobTitle}
-                  </span>
+              <div className="text-sm text-muted-foreground space-y-1">
+                <div>
+                  {currentSession.companyName && (
+                    <span className="font-medium text-foreground">
+                      {currentSession.companyName}
+                    </span>
+                  )}
+                  {currentSession.jobTitle && (
+                    <span>
+                      {currentSession.companyName ? " — " : ""}
+                      {currentSession.jobTitle}
+                    </span>
+                  )}
+                </div>
+                {(currentSession.llmProvider || currentSession.llmModel) && (
+                  <div className="flex items-center gap-2 text-xs">
+                    <Badge variant="outline">
+                      {(availableProviders.find((provider) => provider.id === currentSession.llmProvider)?.label ?? currentSession.llmProvider) || "Default provider"}
+                    </Badge>
+                    {currentSession.llmModel && <span>{currentSession.llmModel}</span>}
+                  </div>
                 )}
               </div>
               {currentSession.tailoredText && (

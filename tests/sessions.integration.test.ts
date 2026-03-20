@@ -34,6 +34,7 @@ beforeEach(() => {
   process.env.LLM_PROVIDER = "openai";
   process.env.LLM_MODEL = "gpt-4o-mini";
   process.env.OPENAI_API_KEY = "test-openai-key";
+  process.env.PERPLEXITY_API_KEY = "test-perplexity-key";
   process.env.ENABLE_ENRICHMENT = "true";
 });
 
@@ -275,6 +276,130 @@ test("POST /api/sessions uses the selected OpenAI provider", async () => {
     assert.equal(session.tailoredText, "Tailored content");
     assert.equal(fetchMock.calls.length, 1);
     assert.equal(fetchMock.calls[0]?.url, "https://api.openai.com/v1/chat/completions");
+  } finally {
+    fetchMock.restore();
+    await stopTestServer(server);
+  }
+});
+
+test("POST /api/sessions uses the selected Perplexity provider", async () => {
+  process.env.ENABLE_ENRICHMENT = "false";
+  process.env.LLM_PROVIDER = "perplexity";
+  process.env.LLM_MODEL = "sonar";
+
+  const resume = createResume();
+  const fetchMock = installFetchMock(async ({ url, init }) => {
+    if (url === "https://api.perplexity.ai/chat/completions") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      assert.equal(body.model, "sonar");
+      assert.equal(body.messages[1].role, "user");
+
+      return jsonResponse({
+        choices: [{ message: { content: "<tailored_resume>Perplexity tailored content</tailored_resume>" } }],
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  });
+
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await postJson<any>(`${baseUrl}/api/sessions`, {
+      resumeId: resume.id,
+      jobDescription: "Looking for an engineer with strong product instincts.",
+      companyName: "Acme",
+      jobTitle: "Product Engineer",
+    });
+
+    assert.equal(response.statusCode, 200);
+
+    const session = response.body;
+    assert.equal(session.status, "completed");
+    assert.equal(session.tailoredText, "Perplexity tailored content");
+    assert.equal(fetchMock.calls.length, 1);
+    assert.equal(fetchMock.calls[0]?.url, "https://api.perplexity.ai/chat/completions");
+  } finally {
+    fetchMock.restore();
+    await stopTestServer(server);
+  }
+});
+
+test("GET /api/llm/options returns configured providers", async () => {
+  const fetchMock = installFetchMock(async ({ url }) => {
+    if (url === "http://127.0.0.1:11434/api/tags") {
+      return jsonResponse({
+        models: [{ name: "llama3.1" }, { name: "mistral" }],
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  });
+
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const response = await getJson<any>(`${baseUrl}/api/llm/options`);
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(
+      response.body.providers.map((provider: { id: string }) => provider.id),
+      ["openai", "perplexity", "ollama"],
+    );
+    assert.equal(response.body.defaultProvider, "openai");
+    assert.equal(response.body.providers[2].models[0].id, "llama3.1");
+  } finally {
+    fetchMock.restore();
+    await stopTestServer(server);
+  }
+});
+
+test("POST /api/sessions/:id/chat keeps using the session-specific provider", async () => {
+  process.env.ENABLE_ENRICHMENT = "false";
+
+  const resume = createResume();
+  const fetchMock = installFetchMock(async ({ url, init }) => {
+    if (url === "https://api.perplexity.ai/chat/completions") {
+      const body = JSON.parse(String(init?.body ?? "{}"));
+      const conversation = body.messages as Array<{ role: string; content: string }>;
+
+      if (conversation.length === 2) {
+        return jsonResponse({
+          choices: [{ message: { content: "I need one detail before I tailor this." } }],
+        });
+      }
+
+      assert.equal(conversation.at(-1)?.content, "Please emphasize my analytics work.");
+      return jsonResponse({
+        choices: [{ message: { content: "<tailored_resume>Perplexity follow-up tailored resume</tailored_resume>" } }],
+      });
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  });
+
+  const { server, baseUrl } = await startTestServer();
+
+  try {
+    const createdSession = await postJson<any>(`${baseUrl}/api/sessions`, {
+      resumeId: resume.id,
+      jobDescription: "Looking for a product-minded engineer.",
+      companyName: "Acme",
+      llmProvider: "perplexity",
+      llmModel: "sonar",
+    });
+
+    assert.equal(createdSession.statusCode, 200);
+    assert.equal(createdSession.body.llmProvider, "perplexity");
+    assert.equal(createdSession.body.llmModel, "sonar");
+
+    const chattedSession = await postJson<any>(`${baseUrl}/api/sessions/${createdSession.body.id}/chat`, {
+      message: "Please emphasize my analytics work.",
+    });
+
+    assert.equal(chattedSession.statusCode, 200);
+    assert.equal(chattedSession.body.tailoredText, "Perplexity follow-up tailored resume");
+    assert.equal(fetchMock.calls.every((call) => call.url === "https://api.perplexity.ai/chat/completions"), true);
   } finally {
     fetchMock.restore();
     await stopTestServer(server);
